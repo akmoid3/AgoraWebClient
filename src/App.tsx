@@ -13,6 +13,10 @@ import { useState, useEffect } from "react";
 import AgoraRTC, { AgoraRTCProvider, type IAgoraRTCClient, type ILocalVideoTrack } from "agora-rtc-react";
 import "./App.css";
 
+
+const screenShareUID = 10001
+
+
 export const VideoCalling = () => {
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
   return (
@@ -103,7 +107,6 @@ const Basics = () => {
 
   // Screen sharing functions
   const startScreenShare = async () => {
-    const screenShareUID = 10001
     try {
       const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
