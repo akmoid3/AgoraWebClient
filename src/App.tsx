@@ -13,9 +13,7 @@ import { useState, useEffect } from "react";
 import AgoraRTC, { AgoraRTCProvider, type IAgoraRTCClient, type ILocalVideoTrack } from "agora-rtc-react";
 import "./App.css";
 
-
 const screenShareUID = 10001
-
 
 export const VideoCalling = () => {
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
@@ -52,6 +50,10 @@ const Basics = () => {
   usePublish([localMicrophoneTrack, localCameraTrack]);
 
   const remoteUsers = useRemoteUsers();
+
+  // Trova l'utente che sta condividendo lo schermo
+  const screenShareUser = remoteUsers.find(user => user.uid === screenShareUID);
+  const regularUsers = remoteUsers.filter(user => user.uid !== screenShareUID);
 
   const initRTM = async () => {
     const { RTM } = AgoraRTM;
@@ -163,6 +165,7 @@ const Basics = () => {
       initRTM();
     }
   }, [isConnected]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -184,68 +187,138 @@ const Basics = () => {
         <>
           <div className={`video-call-area ${chatVisible ? 'chat-open' : ''}`}>
             <div className="video-call-content">
-              <div className="video-grid">
-                <div className="local-user-container">
-                  <LocalUser
-                    audioTrack={localMicrophoneTrack}
-                    cameraOn={cameraOn}
-                    micOn={micOn}
-                    playAudio={false}
-                    videoTrack={localCameraTrack}
-                    className="video-frame"
-                  >
-                    <div className="user-label">You</div>
-                  </LocalUser>
-                </div>
+              {/* Layout per screen sharing */}
+              {(screenShareOn || screenShareUser) ? (
+                <>
+                  {/* Barra superiore con gli utenti connessi */}
+                  <div className="users-bar">
+                    <div className="local-user-small">
+                      <LocalUser
+                        audioTrack={localMicrophoneTrack}
+                        cameraOn={cameraOn}
+                        micOn={micOn}
+                        playAudio={false}
+                        videoTrack={localCameraTrack}
+                        className="video-frame-small"
+                      >
+                        <div className="user-label-small">You</div>
+                      </LocalUser>
+                    </div>
 
-                {remoteUsers.map((user) => (
-                  <div key={user.uid} className="remote-user-container">
-                    <RemoteUser user={user} className="video-frame">
-                      <div className="user-label">{user.uid}</div>
-                    </RemoteUser>
+                    {regularUsers.map((user) => (
+                      <div key={user.uid} className="remote-user-small">
+                        <RemoteUser user={user} className="video-frame-small">
+                          <div className="user-label-small">{user.uid}</div>
+                        </RemoteUser>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+
+                  {/* Area principale per lo screen share */}
+                  <div className="screen-share-area">
+                    {screenShareUser ? (
+                      <div className="screen-share-container">
+                        <RemoteUser
+                          user={screenShareUser}
+                          className="screen-share-frame"
+                        >
+                          <div className="screen-share-label">
+                            <span className="share-icon">🖥️</span>
+                            Screen Shared by {screenShareUser.uid}
+                          </div>
+                        </RemoteUser>
+                      </div>
+                    ) : screenShareOn && screenTrack ? (
+                      <div className="screen-share-container">
+                        <div
+                          className="screen-share-frame"
+                          ref={(ref) => {
+                            if (ref && screenTrack) {
+                              // Clear any existing content
+                              ref.innerHTML = '';
+                              screenTrack.play(ref);
+                            }
+                          }}
+                        >
+                          <div className="screen-share-label">
+                            <span className="share-icon">🖥️</span>
+                            Your Screen Share
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                /* Layout normale senza screen sharing */
+                <div className="video-grid">
+                  <div className="local-user-container">
+                    <LocalUser
+                      audioTrack={localMicrophoneTrack}
+                      cameraOn={cameraOn}
+                      micOn={micOn}
+                      playAudio={false}
+                      videoTrack={localCameraTrack}
+                      className="video-frame"
+                    >
+                      <div className="user-label">You</div>
+                    </LocalUser>
+                  </div>
+
+                  {regularUsers.map((user) => (
+                    <div key={user.uid} className="remote-user-container">
+                      <RemoteUser user={user} className="video-frame">
+                        <div className="user-label">{user.uid}</div>
+                      </RemoteUser>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="control-panel">
                 <button
                   className={`control-btn ${micOn ? 'active' : 'inactive'}`}
                   onClick={() => setMic(a => !a)}
+                  data-tooltip={micOn ? "Mute Microphone" : "Unmute Microphone"}
                 >
                   <span className="btn-icon">🎤</span>
-                  {micOn ? "Mute" : "Unmute"}
+                  <span className="btn-text">{micOn ? "Mute" : "Unmute"}</span>
                 </button>
 
                 <button
                   className={`control-btn ${cameraOn ? 'active' : 'inactive'}`}
                   onClick={() => setCamera(a => !a)}
+                  data-tooltip={cameraOn ? "Turn Off Camera" : "Turn On Camera"}
                 >
                   <span className="btn-icon">📹</span>
-                  {cameraOn ? "Stop Video" : "Start Video"}
+                  <span className="btn-text">{cameraOn ? "Stop Video" : "Start Video"}</span>
                 </button>
 
                 <button
                   className={`control-btn ${screenShareOn ? 'active' : 'inactive'}`}
                   onClick={handleScreenShare}
+                  data-tooltip={screenShareOn ? "Stop Screen Share" : "Start Screen Share"}
                 >
                   <span className="btn-icon">🖥️</span>
-                  {screenShareOn ? "Stop Share" : "Share Screen"}
+                  <span className="btn-text">{screenShareOn ? "Stop Share" : "Share Screen"}</span>
                 </button>
 
                 <button
                   className={`control-btn ${chatVisible ? 'active' : 'inactive'}`}
                   onClick={() => setChatVisible(!chatVisible)}
+                  data-tooltip={chatVisible ? "Close Chat" : "Open Chat"}
                 >
                   <span className="btn-icon">💬</span>
-                  Chat
+                  <span className="btn-text">Chat</span>
                 </button>
 
                 <button
                   className="control-btn end-call"
                   onClick={() => setCalling(a => !a)}
+                  data-tooltip="End Call"
                 >
                   <span className="btn-icon">📞</span>
-                  End Call
+                  <span className="btn-text">End Call</span>
                 </button>
               </div>
             </div>
