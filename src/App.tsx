@@ -10,7 +10,7 @@ import {
 } from "agora-rtc-react";
 import AgoraRTM from 'agora-rtm-sdk';
 import { useState, useEffect } from "react";
-import AgoraRTC, { AgoraRTCProvider, type IAgoraRTCClient, type ILocalVideoTrack } from "agora-rtc-react";
+import AgoraRTC, { useCurrentUID, AgoraRTCProvider, type IAgoraRTCClient, type ILocalVideoTrack } from "agora-rtc-react";
 import "./App.css";
 
 const screenShareUID = 10001
@@ -29,8 +29,8 @@ const Basics = () => {
   const isConnected = useIsConnected();
   const [appId, setAppId] = useState("4703d12de1af47eb94294a750641a314");
   const [channel, setChannel] = useState("Unity_Channel");
-  const [token, setToken] = useState("007eJxTYGBh5/u0J9ts5onGOk3JDTN82ctLXlrfSGZp4DiWsnnODmUFBhNzA+MUQ6OUVMPENBPz1CRLEyNLk0RzUwMzE8NEY0MT8YPVGQ2BjAyycstYGRkgEMTnZQjNyyypjHfOSMzLS81hYAAAk9EfvQ==");
-  const [rtmToken, setRtmToken] = useState("007eJxSYPiwVq1D/5vr+eL2NPGuE31d0g/UXzYGWMT+Xf+s+ds0uxgFBhNzA+MUQ6OUVMPENBPz1CRLEyNLk0RzUwMzE8NEY0OT1tvVGQ2BjAx5MZ2sTAyMDCAM4rOASV6G0LzMksp454zEvLzUHGYGQyNjkAqIGjAXEAAA//9dRybY");
+  const [token, setToken] = useState("007eJxTYPCbySLMmsuTPV1wlmK0xdLj+u9ap7Yo/SxaOu+yl97zyFAFBhNzA+MUQ6OUVMPENBPz1CRLEyNLk0RzUwMzE8NEY0OTeuNJGQ2BjAyKoYsYGKEQxOdlCM3LLKmMd85IzMtLzWFgAAB6+R/E");
+  const [rtmToken, setRtmToken] = useState("007eJxSYNjbGuA1X/eptNSDWqNzi+bZL5xtxHUnqEraMm4mu87fSZYKDCbmBsYphkYpqYaJaSbmqUmWJkaWJonmpgZmJoaJxoYmEcaTMhoCGRl+itWxMDEwMoAwiM8CJnkZQvMySyrjnTMS8/JSc1gZCoryyxJBaiCqoAKAAAAA//+VOiZu");
   const [micOn, setMic] = useState(true);
   const [cameraOn, setCamera] = useState(true);
   const { localMicrophoneTrack } = useLocalMicrophoneTrack(micOn);
@@ -45,15 +45,16 @@ const Basics = () => {
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [chatVisible, setChatVisible] = useState(false);
+  const [usernames, setUsernames] = useState<{ [key: string]: string }>({});
 
   useJoin({ appid: appId, channel: channel, token: token ? token : null }, calling);
   usePublish([localMicrophoneTrack, localCameraTrack]);
-
   const remoteUsers = useRemoteUsers();
 
   // Trova l'utente che sta condividendo lo schermo
   const screenShareUser = remoteUsers.find(user => user.uid === screenShareUID);
   const regularUsers = remoteUsers.filter(user => user.uid !== screenShareUID);
+  const rtcID = useCurrentUID()?.toString() || "0";
 
   const initRTM = async () => {
     const { RTM } = AgoraRTM;
@@ -62,14 +63,28 @@ const Basics = () => {
     try {
       const rtm = new RTM(appId, userId);
 
-      // Login to RTM using the token from the form
+
       const result = await rtm.login({ token: rtmToken || undefined });
       console.log(result);
 
-      // Subscribe to channel
-      await rtm.subscribe(channel);
 
-      // Listen for messages
+      await rtm.subscribe(channel, {withMessage: true,
+      withPresence: true,
+      beQuiet: false,
+      withMetadata: true,
+      withLock: true,});
+
+
+      // Listen for storage events to automatically update when metadata changes
+      rtm.addEventListener('storage', (event) => {
+        console.log('Storage event received:', event);
+        if (event.channelType === 'MESSAGE' && event.storageType === 'CHANNEL') {
+          fetchAllUserMappings(rtm);
+          console.log('STORAGE UPDATE:', event);
+        }
+      });
+
+
       rtm.addEventListener('message', (event) => {
         console.log('Message received:', event);
         if (event.publisher == username)
@@ -82,13 +97,60 @@ const Basics = () => {
         }]);
       });
 
+
+
+      const name = {
+        key: rtcID,
+        value: username
+      };
+
+
+      const data = [name];
+      const options = { addTimeStamp: true, addUserId: true };
+
+
       setRtmClient(rtm);
       console.log("RTM initialized and connected successfully");
+
+      const result2 = await rtm.storage.setChannelMetadata(channel, "MESSAGE", data, options);
+      console.log("Channel metadata set:", result2);
+
+      await fetchAllUserMappings(rtm);
 
     } catch (status) {
       console.log("RTM Error:", status);
     }
   };
+
+  const fetchAllUserMappings = async (rtmInstance = rtmClient) => {
+    if (!rtmInstance) return;
+
+    try {
+      const result = await rtmInstance.storage.getChannelMetadata(channel, "MESSAGE");
+      console.log("Channel metadata retrieved:", result);
+
+      if (result && result.metadata) {
+        const newUsernames: { [key: string]: string } = {};
+
+        // Get ALL metadata first, then filter by current users
+        Object.keys(result.metadata).forEach((rtcId) => {
+          const userInfo = result.metadata[rtcId];
+          if (userInfo && userInfo.value) {
+            newUsernames[rtcId] = userInfo.value;
+            console.log(`Found mapping: RTC ID ${rtcId} -> username ${userInfo.value}`);
+          }
+        });
+
+        setUsernames(newUsernames);
+        console.log("Updated usernames mapping:", newUsernames);
+        console.log("Current remote users:", remoteUsers.map(u => u.uid.toString()));
+        console.log("Local RTC ID:", rtcID);
+      }
+    } catch (error) {
+      console.error("Failed to fetch user mappings:", error);
+    }
+  };
+
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !rtmClient) return;
@@ -107,7 +169,7 @@ const Basics = () => {
     }
   };
 
-  // Screen sharing functions
+
   const startScreenShare = async () => {
     try {
       const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
@@ -160,6 +222,12 @@ const Basics = () => {
     }
   };
 
+  const getUsernameByRtcId = (id: string | number): string => {
+    const idrtc = id.toString();
+    return usernames[idrtc] || `User ${idrtc}`;
+  };
+
+
   useEffect(() => {
     if (isConnected) {
       initRTM();
@@ -208,7 +276,7 @@ const Basics = () => {
                     {regularUsers.map((user) => (
                       <div key={user.uid} className="remote-user-small">
                         <RemoteUser user={user} className="video-frame-small">
-                          <div className="user-label-small">{user.uid}</div>
+                          <div className="user-label-small">{getUsernameByRtcId(user.uid)}</div>
                         </RemoteUser>
                       </div>
                     ))}
@@ -224,7 +292,7 @@ const Basics = () => {
                         >
                           <div className="screen-share-label">
                             <span className="share-icon">🖥️</span>
-                            Screen Shared by {screenShareUser.uid}
+                            Screen Shared by {getUsernameByRtcId(screenShareUser.uid)}
                           </div>
                         </RemoteUser>
                       </div>
@@ -268,7 +336,7 @@ const Basics = () => {
                   {regularUsers.map((user) => (
                     <div key={user.uid} className="remote-user-container">
                       <RemoteUser user={user} className="video-frame">
-                        <div className="user-label">{user.uid}</div>
+                        <div className="user-label">{getUsernameByRtcId(user.uid)}</div>
                       </RemoteUser>
                     </div>
                   ))}
