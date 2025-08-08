@@ -14,6 +14,8 @@ import AgoraRTC, { useCurrentUID, AgoraRTCProvider, type IAgoraRTCClient, type I
 import "./App.css";
 
 const screenShareUID = 10001
+// Add: configurable backend base URL (env or fallback)
+const TOKEN_SERVER_BASE_URL = "http://127.0.0.1:5000";
 
 export const VideoCalling = () => {
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
@@ -29,8 +31,11 @@ const Basics = () => {
   const isConnected = useIsConnected();
   const [appId, setAppId] = useState("4703d12de1af47eb94294a750641a314");
   const [channel, setChannel] = useState("Unity_Channel");
-  const [token, setToken] = useState("007eJxTYPCbySLMmsuTPV1wlmK0xdLj+u9ap7Yo/SxaOu+yl97zyFAFBhNzA+MUQ6OUVMPENBPz1CRLEyNLk0RzUwMzE8NEY0OTeuNJGQ2BjAyKoYsYGKEQxOdlCM3LLKmMd85IzMtLzWFgAAB6+R/E");
-  const [rtmToken, setRtmToken] = useState("007eJxSYNjbGuA1X/eptNSDWqNzi+bZL5xtxHUnqEraMm4mu87fSZYKDCbmBsYphkYpqYaJaSbmqUmWJkaWJonmpgZmJoaJxoYmEcaTMhoCGRl+itWxMDEwMoAwiM8CJnkZQvMySyrjnTMS8/JSc1gZCoryyxJBaiCqoAKAAAAA//+VOiZu");
+  const [token, setToken] = useState<string>("");              
+  const [rtmToken, setRtmToken] = useState<string>("");        
+  const [uid, setUid] = useState<number | null>(null);         
+  const [loadingJoin, setLoadingJoin] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [micOn, setMic] = useState(true);
   const [cameraOn, setCamera] = useState(true);
   const { localMicrophoneTrack } = useLocalMicrophoneTrack(micOn);
@@ -47,7 +52,7 @@ const Basics = () => {
   const [chatVisible, setChatVisible] = useState(false);
   const [usernames, setUsernames] = useState<{ [key: string]: string }>({});
 
-  useJoin({ appid: appId, channel: channel, token: token ? token : null }, calling);
+  useJoin({ appid: appId, channel: channel, token: token || null, uid: uid ?? undefined }, calling);
   usePublish([localMicrophoneTrack, localCameraTrack]);
   const remoteUsers = useRemoteUsers();
 
@@ -56,7 +61,134 @@ const Basics = () => {
   const regularUsers = remoteUsers.filter(user => user.uid !== screenShareUID);
   const rtcID = useCurrentUID()?.toString() || "0";
 
+  // --- Token fetch helpers ---
+  const fetchRtcToken = async (requestUid: number) => {
+    const url = `${TOKEN_SERVER_BASE_URL}/token/uid?channelName=${encodeURIComponent(channel)}&uid=${requestUid}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`RTC token fetch failed (${res.status})`);
+    const data = await res.json();
+    if (!data.token) throw new Error("RTC token missing in response");
+    return data.token as string;
+  };
+
+  const fetchRtmToken = async (account: string) => {
+    const url = `${TOKEN_SERVER_BASE_URL}/token/rtm?channelName=${encodeURIComponent(channel)}&account=${encodeURIComponent(account)}`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`RTM token fetch failed (${res.status})`);
+    const data = await res.json();
+    if (!data.token) throw new Error("RTM token missing in response");
+    return data.token as string;
+  };
+
+  const handleJoin = async () => {
+    setJoinError(null);
+    setLoadingJoin(true);
+    try {
+      // Generate a UID (ensure it does not collide with screenShareUID)
+      let newUid = Math.floor(Math.random() * 900000) + 1000;
+      if (newUid === screenShareUID) newUid += 1;
+
+      const [rtcTok, rtmTok] = await Promise.all([
+        fetchRtcToken(newUid),
+        fetchRtmToken(username)
+      ]);
+
+      setUid(newUid);
+      setToken(rtcTok);
+      setRtmToken(rtmTok);
+      setCalling(true);
+    } catch (e: any) {
+      console.error(e);
+      setJoinError(e.message || "Join failed");
+    } finally {
+      setLoadingJoin(false);
+    }
+  };
+
+  // Refresh tokens before expiry (simple interval ~55 mins for 60 min validity)
+  useEffect(() => {
+    if (!calling || !uid || !username) return;
+    const refreshMs = 55 * 60 * 1000;
+    const interval = setInterval(async () => {
+      try {
+        const [rtcTok, rtmTok] = await Promise.all([
+          fetchRtcToken(uid),
+          fetchRtmToken(username)
+        ]);
+        setToken(rtcTok);
+        setRtmToken(rtmTok);
+        console.log("Tokens refreshed");
+      } catch (err) {
+        console.warn("Token refresh failed", err);
+      }
+    }, refreshMs);
+    return () => clearInterval(interval);
+  }, [calling, uid, username, channel]);
+
+  // Modify startScreenShare to get a fresh token for screenShareUID
+  const startScreenShare = async () => {
+    try {
+      const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+
+      // Fetch a dedicated RTC token for the screen-share UID
+      const screenToken = await fetchRtcToken(screenShareUID);
+
+      await newScreenClient.join(appId, channel, screenToken || null, screenShareUID);
+
+      const screenTrackResult = await AgoraRTC.createScreenVideoTrack({});
+      let screenVideoTrack: ILocalVideoTrack;
+      if (Array.isArray(screenTrackResult)) {
+        screenVideoTrack = screenTrackResult[0];
+        await newScreenClient.publish(screenTrackResult);
+      } else {
+        screenVideoTrack = screenTrackResult;
+        await newScreenClient.publish(screenVideoTrack);
+      }
+
+      setScreenClient(newScreenClient);
+      setScreenTrack(screenVideoTrack);
+      setScreenShare(true);
+
+    } catch (error) {
+      console.error("Error starting screen share:", error);
+      setScreenShare(false);
+    }
+  };
+
+  const stopScreenShare = async () => {
+    try {
+      if (screenTrack) {
+        screenTrack.close();
+        setScreenTrack(null);
+      }
+
+      if (screenClient) {
+        await screenClient.leave();
+        setScreenClient(null);
+      }
+
+      setScreenShare(false);
+    } catch (error) {
+      console.error("Error stopping screen share:", error);
+    }
+  };
+
+  const handleScreenShare = () => {
+    if (screenShareOn) {
+      stopScreenShare();
+    } else {
+      startScreenShare();
+    }
+  };
+
+  const getUsernameByRtcId = (id: string | number): string => {
+    const idrtc = id.toString();
+    return usernames[idrtc] || `User ${idrtc}`;
+  };
+
+
   const initRTM = async () => {
+    if (!rtmToken) return; // ensure token fetched
     const { RTM } = AgoraRTM;
     const userId = username;
 
@@ -170,69 +302,11 @@ const Basics = () => {
   };
 
 
-  const startScreenShare = async () => {
-    try {
-      const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
-
-      await newScreenClient.join(appId, channel, token || null, screenShareUID);
-
-      const screenTrackResult = await AgoraRTC.createScreenVideoTrack({});
-      let screenVideoTrack: ILocalVideoTrack;
-      if (Array.isArray(screenTrackResult)) {
-        screenVideoTrack = screenTrackResult[0];
-        await newScreenClient.publish(screenTrackResult);
-      } else {
-        screenVideoTrack = screenTrackResult;
-        await newScreenClient.publish(screenVideoTrack);
-      }
-
-      setScreenClient(newScreenClient);
-      setScreenTrack(screenVideoTrack);
-      setScreenShare(true);
-
-    } catch (error) {
-      console.error("Error starting screen share:", error);
-      setScreenShare(false);
-    }
-  };
-
-  const stopScreenShare = async () => {
-    try {
-      if (screenTrack) {
-        screenTrack.close();
-        setScreenTrack(null);
-      }
-
-      if (screenClient) {
-        await screenClient.leave();
-        setScreenClient(null);
-      }
-
-      setScreenShare(false);
-    } catch (error) {
-      console.error("Error stopping screen share:", error);
-    }
-  };
-
-  const handleScreenShare = () => {
-    if (screenShareOn) {
-      stopScreenShare();
-    } else {
-      startScreenShare();
-    }
-  };
-
-  const getUsernameByRtcId = (id: string | number): string => {
-    const idrtc = id.toString();
-    return usernames[idrtc] || `User ${idrtc}`;
-  };
-
-
   useEffect(() => {
-    if (isConnected) {
+    if (isConnected && rtmToken) {
       initRTM();
     }
-  }, [isConnected]);
+  }, [isConnected, rtmToken]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -454,17 +528,6 @@ const Basics = () => {
           </div>
 
           <div className="form-group">
-            <label>App ID</label>
-            <input
-              type="text"
-              onChange={e => setAppId(e.target.value)}
-              placeholder="Enter your app ID"
-              value={appId}
-              className="form-input"
-            />
-          </div>
-
-          <div className="form-group">
             <label>Channel Name</label>
             <input
               type="text"
@@ -475,35 +538,14 @@ const Basics = () => {
             />
           </div>
 
-          <div className="form-group">
-            <label>RTC Token</label>
-            <input
-              type="text"
-              onChange={e => setToken(e.target.value)}
-              placeholder="Enter your RTC token"
-              value={token}
-              className="form-input"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>RTM Token</label>
-            <input
-              type="text"
-              onChange={e => setRtmToken(e.target.value)}
-              placeholder="Enter your RTM token (optional)"
-              value={rtmToken}
-              className="form-input"
-            />
-          </div>
-
+          {joinError && <div style={{color: 'red', marginBottom: 8}}>{joinError}</div>}
           <button
-            disabled={!appId || !channel || !username}
-            onClick={() => setCalling(true)}
+            disabled={!appId || !channel || !username || loadingJoin}
+            onClick={handleJoin}
             className="join-btn"
           >
-            <span className="btn-icon">🚀</span>
-            Join Channel
+            <span className="btn-icon">{loadingJoin ? "⏳" : "🚀"}</span>
+            {loadingJoin ? "Joining..." : "Join Channel"}
           </button>
         </div>
       )}
