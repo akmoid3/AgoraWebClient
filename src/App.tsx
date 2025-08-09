@@ -14,7 +14,6 @@ import AgoraRTC, { useCurrentUID, AgoraRTCProvider, type IAgoraRTCClient, type I
 import "./App.css";
 
 const screenShareUID = 10001
-// Add: configurable backend base URL (env or fallback)
 const TOKEN_SERVER_BASE_URL = "http://127.0.0.1:5000";
 
 export const VideoCalling = () => {
@@ -84,7 +83,7 @@ const Basics = () => {
     setJoinError(null);
     setLoadingJoin(true);
     try {
-      // Generate a UID (ensure it does not collide with screenShareUID)
+      // Generate a UID 
       let newUid = Math.floor(Math.random() * 900000) + 1000;
       if (newUid === screenShareUID) newUid += 1;
 
@@ -130,7 +129,6 @@ const Basics = () => {
     try {
       const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
 
-      // Fetch a dedicated RTC token for the screen-share UID
       const screenToken = await fetchRtcToken(screenShareUID);
 
       await newScreenClient.join(appId, channel, screenToken || null, screenShareUID);
@@ -245,8 +243,11 @@ const Basics = () => {
       console.log("RTM initialized and connected successfully");
 
       const result2 = await rtm.storage.setChannelMetadata(channel, "MESSAGE", data, options);
+
+      
       console.log("Channel metadata set:", result2);
 
+  
       await fetchAllUserMappings(rtm);
 
     } catch (status) {
@@ -301,6 +302,51 @@ const Basics = () => {
     }
   };
 
+  const removeSelfMetadata = async () => {
+    if (!rtmClient || !rtcID) return;
+     const name = {
+        key: rtcID,
+      };
+
+
+      const toremove = [name];
+      const options = {
+        data: toremove,
+      };
+
+    try {
+      const result = await rtmClient.storage.removeChannelMetadata(
+        channel,
+        "MESSAGE",
+        options
+      );
+      console.log("Removed own metadata key:", result);
+    } catch (e) {
+      console.warn("Failed to remove own metadata", e);
+    }
+  };
+
+
+
+  // Handler "End Call": stop share, clear metadata, unsubscribe, logout, reset stato
+  const handleLeave = async () => {
+    try {
+      if (screenShareOn) await stopScreenShare();
+
+      await removeSelfMetadata(); 
+
+      if (rtmClient) {
+        try { await rtmClient.unsubscribe(channel); } catch (e) { console.warn("RTM unsubscribe failed", e); }
+        try { await rtmClient.logout(); } catch (e) { console.warn("RTM logout failed", e); }
+      }
+    } finally {
+      setCalling(false);
+      setRtmClient(null);
+      setMessages([]);
+      setUsernames({});
+      setRtmToken("");
+    }
+  };
 
   useEffect(() => {
     if (isConnected && rtmToken) {
@@ -314,6 +360,7 @@ const Basics = () => {
       if (screenShareOn) {
         stopScreenShare();
       }
+      
     };
   }, []);
 
@@ -456,7 +503,7 @@ const Basics = () => {
 
                 <button
                   className="control-btn end-call"
-                  onClick={() => setCalling(a => !a)}
+                  onClick={handleLeave}
                   data-tooltip="End Call"
                 >
                   <span className="btn-icon">📞</span>
