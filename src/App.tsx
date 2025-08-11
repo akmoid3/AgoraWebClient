@@ -34,8 +34,8 @@ export const VideoCalling = () => {
 const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
   const [calling, setCalling] = useState(false);
   const isConnected = useIsConnected();
-  const [appId, setAppId] = useState("4703d12de1af47eb94294a750641a314");
-  const [channel, setChannel] = useState("Unity_Channel");
+  const appId = "4703d12de1af47eb94294a750641a314";
+  const [channel, setChannel] = useState("prova1");
   const [token, setToken] = useState<string>("");              
   const [rtmToken, setRtmToken] = useState<string>("");        
   const [uid, setUid] = useState<number | null>(null);         
@@ -56,6 +56,9 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
   const [newMessage, setNewMessage] = useState("");
   const [chatVisible, setChatVisible] = useState(false);
   const [usernames, setUsernames] = useState<{ [key: string]: string }>({});
+  // Raise hand state
+  const [raisedHands, setRaisedHands] = useState<{ [key: string]: boolean }>({});
+  const [isHandRaised, setIsHandRaised] = useState(false);
 
   useJoin({ appid: appId, channel: channel, token: token || null, uid: uid ?? undefined }, calling);
   usePublish([localMicrophoneTrack, localCameraTrack]);
@@ -130,7 +133,7 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
     return () => clearInterval(interval);
   }, [calling, uid, username, channel]);
 
-  // Modify startScreenShare to get a fresh token for screenShareUID
+  
   const startScreenShare = async () => {
     try {
       const newScreenClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
@@ -270,20 +273,28 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
 
       if (result && result.metadata) {
         const newUsernames: { [key: string]: string } = {};
+        const newRaised: { [key: string]: boolean } = {};
 
-        // Get ALL metadata first, then filter by current users
-        Object.keys(result.metadata).forEach((rtcId) => {
-          const userInfo = result.metadata[rtcId];
-          if (userInfo && userInfo.value) {
-            newUsernames[rtcId] = userInfo.value;
-            console.log(`Found mapping: RTC ID ${rtcId} -> username ${userInfo.value}`);
+        // Parse metadata entries: numeric keys are usernames, hand:<rtcId> are raise-hand flags
+        Object.keys(result.metadata).forEach((key) => {
+          const entry = result.metadata[key];
+          const value: string | undefined = entry?.value;
+          if (!value) return;
+
+          if (key.startsWith("hand:")) {
+            const rtcId = key.slice(5);
+            newRaised[rtcId] = value === "1" || value === "true";
+          } else if (/^\d+$/.test(key)) {
+            newUsernames[key] = value;
+            console.log(`Found mapping: RTC ID ${key} -> username ${value}`);
           }
         });
 
         setUsernames(newUsernames);
+        setRaisedHands(newRaised);
+        setIsHandRaised(Boolean(newRaised[rtcID]));
         console.log("Updated usernames mapping:", newUsernames);
-        console.log("Current remote users:", remoteUsers.map(u => u.uid.toString()));
-        console.log("Local RTC ID:", rtcID);
+        console.log("Updated raised hands:", newRaised);
       }
     } catch (error) {
       console.error("Failed to fetch user mappings:", error);
@@ -308,6 +319,35 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
     }
   };
 
+  // Raise/lower hand using Channel Metadata
+  const setHandMetadata = async (raised: boolean) => {
+    if (!rtmClient || !rtcID) return;
+    const handKey = `hand:${rtcID}`;
+    try {
+      if (raised) {
+        const data = [{ key: handKey, value: "1" }];
+        await rtmClient.storage.setChannelMetadata(
+          channel,
+          "MESSAGE",
+          data,
+          { addTimeStamp: true, addUserId: true }
+        );
+      } else {
+        await rtmClient.storage.removeChannelMetadata(
+          channel,
+          "MESSAGE",
+          { data: [{ key: handKey }] }
+        );
+      }
+      setIsHandRaised(raised);
+      setRaisedHands(prev => ({ ...prev, [rtcID]: raised }));
+    } catch (e) {
+      console.warn("Failed to update hand metadata", e);
+    }
+  };
+
+  const toggleHand = () => setHandMetadata(!isHandRaised);
+
   const removeSelfMetadata = async () => {
     if (!rtmClient || !rtcID) return;
      const name = {
@@ -329,6 +369,18 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
       console.log("Removed own metadata key:", result);
     } catch (e) {
       console.warn("Failed to remove own metadata", e);
+    }
+
+    // Also remove own raise-hand key if present
+    try {
+      const res2 = await rtmClient.storage.removeChannelMetadata(
+        channel,
+        "MESSAGE",
+        { data: [{ key: `hand:${rtcID}` }] }
+      );
+      console.log("Removed own hand metadata key:", res2);
+    } catch (e) {
+      console.warn("Failed to remove own hand metadata", e);
     }
   };
 
@@ -393,14 +445,16 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
                         videoTrack={localCameraTrack}
                         className="video-frame-small"
                       >
-                        <div className="user-label-small">You</div>
+                        <div className="user-label-small">You {isHandRaised && <span className="hand-badge">✋</span>}</div>
                       </LocalUser>
                     </div>
 
                     {regularUsers.map((user) => (
                       <div key={user.uid} className="remote-user-small">
                         <RemoteUser user={user} className="video-frame-small">
-                          <div className="user-label-small">{getUsernameByRtcId(user.uid)}</div>
+                          <div className="user-label-small">
+                            {getUsernameByRtcId(user.uid)} {raisedHands[user.uid.toString()] && <span className="hand-badge">✋</span>}
+                          </div>
                         </RemoteUser>
                       </div>
                     ))}
@@ -453,14 +507,16 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
                       videoTrack={localCameraTrack}
                       className="video-frame"
                     >
-                      <div className="user-label">You</div>
+                      <div className="user-label">You {isHandRaised && <span className="hand-badge">✋</span>}</div>
                     </LocalUser>
                   </div>
 
                   {regularUsers.map((user) => (
                     <div key={user.uid} className="remote-user-container">
                       <RemoteUser user={user} className="video-frame">
-                        <div className="user-label">{getUsernameByRtcId(user.uid)}</div>
+                        <div className="user-label">
+                          {getUsernameByRtcId(user.uid)} {raisedHands[user.uid.toString()] && <span className="hand-badge">✋</span>}
+                        </div>
                       </RemoteUser>
                     </div>
                   ))}
@@ -468,6 +524,15 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
               )}
 
               <div className="control-panel">
+                <button
+                  className={`control-btn ${isHandRaised ? 'active' : 'inactive'}`}
+                  onClick={toggleHand}
+                  disabled={!rtmClient}
+                  data-tooltip={isHandRaised ? "Lower Hand" : "Raise Hand"}
+                >
+                  <span className="btn-icon">✋</span>
+                  <span className="btn-text">{isHandRaised ? "Lower Hand" : "Raise Hand"}</span>
+                </button>
                 <button
                   className={`control-btn ${micOn ? 'active' : 'inactive'}`}
                   onClick={() => setMic(a => !a)}
