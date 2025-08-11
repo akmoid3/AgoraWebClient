@@ -18,14 +18,20 @@ const TOKEN_SERVER_BASE_URL = "http://127.0.0.1:5000";
 
 export const VideoCalling = () => {
   const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+  // Forza il remount di <Basics /> cambiando la chiave
+  const [instanceKey, setInstanceKey] = useState(0);
+
   return (
     <AgoraRTCProvider client={client}>
-      <Basics />
+      <Basics
+        key={instanceKey}
+        onRequestDestroy={() => setInstanceKey(k => k + 1)}
+      />
     </AgoraRTCProvider>
   );
 }
 
-const Basics = () => {
+const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
   const [calling, setCalling] = useState(false);
   const isConnected = useIsConnected();
   const [appId, setAppId] = useState("4703d12de1af47eb94294a750641a314");
@@ -340,11 +346,8 @@ const Basics = () => {
         try { await rtmClient.logout(); } catch (e) { console.warn("RTM logout failed", e); }
       }
     } finally {
-      setCalling(false);
-      setRtmClient(null);
-      setMessages([]);
-      setUsernames({});
-      setRtmToken("");
+      // Lascio il canale distruggendo il componente
+      onRequestDestroy?.();
     }
   };
 
