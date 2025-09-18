@@ -34,8 +34,8 @@ export const VideoCalling = () => {
 const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
   const [calling, setCalling] = useState(false);
   const isConnected = useIsConnected();
-  const appId = "4703d12de1af47eb94294a750641a314";
-  const [channel, setChannel] = useState("prova1");
+  const appId = "aa9b36dd3320409b808cd5463cd4ef39";
+  const [channel, setChannel] = useState("Classe");
   const [token, setToken] = useState<string>("");              
   const [rtmToken, setRtmToken] = useState<string>("");        
   const [uid, setUid] = useState<number | null>(null);         
@@ -95,12 +95,10 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
       // Generate a UID 
       let newUid = Math.floor(Math.random() * 900000) + 1000;
       if (newUid === screenShareUID) newUid += 1;
-
       const [rtcTok, rtmTok] = await Promise.all([
         fetchRtcToken(newUid),
         fetchRtmToken(username)
       ]);
-
       setUid(newUid);
       setToken(rtcTok);
       setRtmToken(rtmTok);
@@ -470,7 +468,7 @@ const Basics = ({ onRequestDestroy }: { onRequestDestroy?: () => void }) => {
                         >
                           <div className="screen-share-label">
                             <span className="share-icon">🖥️</span>
-                            Screen Shared by {getUsernameByRtcId(screenShareUser.uid)}
+                            Screen Share
                           </div>
                         </RemoteUser>
                       </div>
